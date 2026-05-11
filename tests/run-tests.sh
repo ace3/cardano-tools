@@ -146,18 +146,44 @@ assert_contains "START_KES_PERIOD=1386" "$TMP_DIR/kes-status.out"
 test "$(cat "$OUT_DIR/kes-renewal/start-kes-period.txt")" = "1386" || fail "start KES period was not written"
 test -f "$OUT_DIR/kes-renewal/kes-period-info.json" || fail "KES period info was not written"
 
+"$SCRIPT" kes-plan > "$TMP_DIR/kes-plan.out"
+assert_contains "START_KES_PERIOD=1386" "$TMP_DIR/kes-plan.out"
+assert_contains "cardano-blockproducer" "$TMP_DIR/kes-plan.out"
+test -f "$OUT_DIR/kes-renewal/operator-plan.txt" || fail "operator plan was not written"
+
+if START_KES_PERIOD=1385 "$SCRIPT" kes-generate > "$TMP_DIR/kes-generate-stale.out" 2>&1; then
+  fail "stale KES period should fail"
+fi
+assert_contains "does not match latest computed period 1386" "$TMP_DIR/kes-generate-stale.out"
+
 START_KES_PERIOD=1386 "$SCRIPT" kes-generate > "$TMP_DIR/kes-generate.out"
 test -f "$OUT_DIR/kes-renewal/kes.vkey" || fail "generated kes.vkey was not created"
 test -f "$OUT_DIR/kes-renewal/kes.skey" || fail "generated kes.skey was not created"
 test -f "$OUT_DIR/kes-renewal/node.cert" || fail "generated node.cert was not created"
+test -f "$OUT_DIR/kes-renewal/manifest.json" || fail "KES manifest was not created"
 assert_command_logged "node key-gen-KES"
 assert_command_logged "node issue-op-cert"
 assert_command_logged "--operational-certificate-issue-counter-file $KEY_DIR/cold.counter"
+
+SOURCE_DIR="$OUT_DIR/kes-renewal" "$SCRIPT" kes-verify-source > "$TMP_DIR/kes-verify-source.out"
+assert_contains "OK: source operational certificate is valid" "$TMP_DIR/kes-verify-source.out"
+
+mkdir -p "$TMP_DIR/incomplete-kes-source"
+if SOURCE_DIR="$TMP_DIR/incomplete-kes-source" "$SCRIPT" kes-verify-source > "$TMP_DIR/kes-verify-source-missing.out" 2>&1; then
+  fail "source verification should fail when files are missing"
+fi
+assert_contains "Missing source KES verification key" "$TMP_DIR/kes-verify-source-missing.out"
+
+if SOURCE_DIR="$OUT_DIR/kes-renewal" INSTALL=1 CONFIRM=INSTALL_KES "$SCRIPT" kes-install > "$TMP_DIR/kes-install-no-backup.out" 2>&1; then
+  fail "KES install should require a backup marker"
+fi
+assert_contains "Missing KES backup marker" "$TMP_DIR/kes-install-no-backup.out"
 
 BACKUP_LABEL=20260511 "$SCRIPT" kes-backup > "$TMP_DIR/kes-backup.out"
 test -f "$TMP_DIR/backup/20260511/kes.vkey" || fail "backup kes.vkey was not created"
 test -f "$TMP_DIR/backup/20260511/kes.skey" || fail "backup kes.skey was not created"
 test -f "$TMP_DIR/backup/20260511/node.cert" || fail "backup node.cert was not created"
+test "$(cat "$OUT_DIR/kes-renewal/last-backup-dir.txt")" = "$TMP_DIR/backup/20260511" || fail "backup marker was not written"
 
 if BACKUP_LABEL=20260511 "$SCRIPT" kes-backup > "$TMP_DIR/kes-backup-denied.out" 2>&1; then
   fail "KES backup should refuse to overwrite an existing backup"
@@ -171,6 +197,7 @@ assert_contains "INSTALL=1 CONFIRM=INSTALL_KES" "$TMP_DIR/kes-install-denied.out
 
 SOURCE_DIR="$OUT_DIR/kes-renewal" INSTALL=1 CONFIRM=INSTALL_KES "$SCRIPT" kes-install > "$TMP_DIR/kes-install.out"
 assert_contains "Installed KES files" "$TMP_DIR/kes-install.out"
+assert_contains "Manual restart checklist" "$TMP_DIR/kes-install.out"
 
 "$SCRIPT" kes-verify > "$TMP_DIR/kes-verify.out"
 assert_contains "OK: installed operational certificate is valid" "$TMP_DIR/kes-verify.out"

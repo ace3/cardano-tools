@@ -43,9 +43,11 @@ Commands:
   build-stake-dereg          TX_IN=<hash#index> [REWARD_BALANCE=<lovelace>]
   sign-stake-dereg
   submit-stake-dereg         SUBMIT=1 CONFIRM=DEREGISTER_STAKE ALLOW_STAKE_DEREG=1
+  kes-plan
   kes-status
   kes-backup                 BACKUP_LABEL=<label>
   kes-generate               START_KES_PERIOD=<period>
+  kes-verify-source          SOURCE_DIR=<dir>
   kes-install                SOURCE_DIR=<dir> INSTALL=1 CONFIRM=INSTALL_KES
   kes-verify
 EOF
@@ -71,6 +73,15 @@ resolve_path() {
   fi
 }
 
+env_path_or_unset() {
+  local name="$1"
+  if [[ -n "${!name:-}" ]]; then
+    resolve_path "${!name}"
+  else
+    printf '<unset>\n'
+  fi
+}
+
 out_dir() {
   resolve_path "$OUT_DIR"
 }
@@ -85,6 +96,10 @@ kes_out_dir() {
 
 kes_artifact() {
   printf '%s/%s\n' "$(kes_out_dir)" "$1"
+}
+
+last_kes_backup_marker() {
+  kes_artifact last-backup-dir.txt
 }
 
 require_command() {
@@ -278,6 +293,78 @@ assert_valid_kes_info() {
   fi
 }
 
+require_kes_source_dir() {
+  require_var SOURCE_DIR
+
+  local source_dir="$1"
+  [[ -d "$source_dir" ]] || die "SOURCE_DIR does not exist: $source_dir"
+  [[ -f "$source_dir/kes.vkey" ]] || die "Missing source KES verification key: $source_dir/kes.vkey"
+  [[ -f "$source_dir/kes.skey" ]] || die "Missing source KES signing key: $source_dir/kes.skey"
+  [[ -f "$source_dir/node.cert" ]] || die "Missing source operational certificate: $source_dir/node.cert"
+}
+
+require_recent_kes_backup() {
+  local marker backup_dir
+  marker="$(last_kes_backup_marker)"
+  [[ -f "$marker" ]] || die "Missing KES backup marker: $marker. Run make kes-backup BACKUP_LABEL=<label> before install."
+  backup_dir="$(< "$marker")"
+  [[ -d "$backup_dir" ]] || die "KES backup directory from marker does not exist: $backup_dir"
+  [[ -f "$backup_dir/kes.vkey" ]] || die "Backup is missing kes.vkey: $backup_dir"
+  [[ -f "$backup_dir/kes.skey" ]] || die "Backup is missing kes.skey: $backup_dir"
+  [[ -f "$backup_dir/node.cert" ]] || die "Backup is missing node.cert: $backup_dir"
+}
+
+can_check_latest_kes_period() {
+  command -v jq >/dev/null 2>&1 || return 1
+  command -v "$CARDANO_CLI" >/dev/null 2>&1 || return 1
+  network_args >/dev/null
+  [[ -n "${CARDANO_NODE_SOCKET_PATH:-}" ]] || return 1
+  [[ -S "$CARDANO_NODE_SOCKET_PATH" || -e "$CARDANO_NODE_SOCKET_PATH" ]] || return 1
+  [[ -n "${SHELLEY_GENESIS_FILE:-}" ]] || return 1
+  [[ -f "$(resolve_path "$SHELLEY_GENESIS_FILE")" ]] || return 1
+}
+
+validate_start_kes_period_for_generate() {
+  if ! can_check_latest_kes_period; then
+    log "Skipping latest KES period check; online node socket/genesis context is not available."
+    return
+  fi
+
+  local latest_period
+  latest_period="$(start_kes_period)"
+  if [[ "$START_KES_PERIOD" != "$latest_period" && "${CONFIRM:-}" != "STALE_KES_PERIOD" ]]; then
+    die "START_KES_PERIOD=$START_KES_PERIOD does not match latest computed period $latest_period. Re-run with START_KES_PERIOD=$latest_period or set CONFIRM=STALE_KES_PERIOD."
+  fi
+}
+
+write_kes_manifest() {
+  local manifest_file
+  manifest_file="$(kes_artifact manifest.json)"
+  cat > "$manifest_file" <<EOF
+{
+  "generatedAt": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "network": "$NETWORK",
+  "startKesPeriod": $START_KES_PERIOD,
+  "coldCounterFile": "$(resolve_path "$COLD_COUNTER_FILE")",
+  "kesVkeyFile": "$(kes_artifact kes.vkey)",
+  "kesSkeyFile": "$(kes_artifact kes.skey)",
+  "nodeCertFile": "$(kes_artifact node.cert)"
+}
+EOF
+  log "Wrote $manifest_file"
+}
+
+print_kes_restart_checklist() {
+  cat <<'EOF'
+Manual restart checklist:
+  1. Stop cardano-blockproducer.
+  2. Restart cardano-relay1.
+  3. Restart cardano-relay2.
+  4. Start cardano-blockproducer.
+  5. Run make kes-verify on cardano-blockproducer.
+EOF
+}
+
 check_env() {
   require_base_env
   require_addresses
@@ -318,6 +405,72 @@ status() {
     --address "$(stake_addr)" | tee "$(artifact stake-address-info.json)"
 }
 
+kes_plan() {
+  require_base_env
+  require_genesis_file
+  require_file_var NODE_CERT_FILE
+  require_var BACKUP_ROOT
+  ensure_kes_out_dir
+
+  local tip_file info_file plan_file start_period expiry node_counter on_disk_counter
+  tip_file="$(artifact tip.json)"
+  info_file="$(kes_artifact kes-period-info.json)"
+  plan_file="$(kes_artifact operator-plan.txt)"
+  start_period="$(start_kes_period)"
+
+  query_tip > "$tip_file"
+  query_kes_period_info "$(resolve_path "$NODE_CERT_FILE")" > "$info_file"
+
+  expiry="$(jq -r '.qKesKesKeyExpiry // "unknown"' "$info_file")"
+  node_counter="$(jq -r '.qKesNodeStateOperationalCertificateNumber // "unknown"' "$info_file")"
+  on_disk_counter="$(jq -r '.qKesOnDiskOperationalCertificateNumber // "unknown"' "$info_file")"
+
+  cat > "$plan_file" <<EOF
+KES renewal operator plan
+
+Run online status on: cardano-relay1 or cardano-blockproducer
+Run cold generation on: cold/offline key location with cold.skey and cold.counter
+Install on: cardano-blockproducer
+Restart manually: cardano-blockproducer, cardano-relay1, cardano-relay2
+
+NETWORK=$NETWORK
+START_KES_PERIOD=$start_period
+KES_EXPIRY=$expiry
+NODE_STATE_OP_CERT_COUNTER=$node_counter
+ON_DISK_OP_CERT_COUNTER=$on_disk_counter
+
+Configured files:
+  NODE_CERT_FILE=$(resolve_path "$NODE_CERT_FILE")
+  KES_VKEY_FILE=$(env_path_or_unset KES_VKEY_FILE)
+  KES_SKEY_FILE=$(env_path_or_unset KES_SKEY_FILE)
+  COLD_COUNTER_FILE=$(env_path_or_unset COLD_COUNTER_FILE)
+  BACKUP_ROOT=$(resolve_path "$BACKUP_ROOT")
+  GENERATED_DIR=$(kes_out_dir)
+
+Operator commands:
+  cardano-relay1 or cardano-blockproducer:
+    make kes-status
+    cat artifacts/kes-renewal/start-kes-period.txt
+
+  cold/offline key location:
+    make kes-generate START_KES_PERIOD=$start_period
+
+  copy only these generated files to cardano-blockproducer staging directory:
+    artifacts/kes-renewal/kes.vkey
+    artifacts/kes-renewal/kes.skey
+    artifacts/kes-renewal/node.cert
+
+  cardano-blockproducer:
+    make kes-backup BACKUP_LABEL=<yyyymmdd>
+    make kes-verify-source SOURCE_DIR=/root/kes-renewal-<yyyymmdd>
+    make kes-install SOURCE_DIR=/root/kes-renewal-<yyyymmdd> INSTALL=1 CONFIRM=INSTALL_KES
+    make kes-verify
+EOF
+
+  cat "$plan_file"
+  log "Wrote $plan_file"
+}
+
 kes_status() {
   require_base_env
   require_genesis_file
@@ -351,8 +504,10 @@ kes_backup() {
   cp "$(resolve_path "$KES_VKEY_FILE")" "$backup_dir/kes.vkey"
   cp "$(resolve_path "$KES_SKEY_FILE")" "$backup_dir/kes.skey"
   cp "$(resolve_path "$NODE_CERT_FILE")" "$backup_dir/node.cert"
+  printf '%s\n' "$backup_dir" > "$(last_kes_backup_marker)"
 
   log "Wrote KES backup: $backup_dir"
+  log "Wrote $(last_kes_backup_marker)"
 }
 
 kes_generate() {
@@ -363,6 +518,7 @@ kes_generate() {
   require_cold_keys
   require_cold_counter
   ensure_kes_out_dir
+  validate_start_kes_period_for_generate
 
   "$CARDANO_CLI" node key-gen-KES \
     --verification-key-file "$(kes_artifact kes.vkey)" \
@@ -378,29 +534,45 @@ kes_generate() {
   log "Wrote $(kes_artifact kes.vkey)"
   log "Wrote $(kes_artifact kes.skey)"
   log "Wrote $(kes_artifact node.cert)"
+  write_kes_manifest
+}
+
+kes_verify_source() {
+  require_base_env
+  ensure_kes_out_dir
+
+  local source_dir info_file
+  source_dir="$(resolve_path "$SOURCE_DIR")"
+  require_kes_source_dir "$source_dir"
+  info_file="$(kes_artifact source-kes-verify.json)"
+
+  query_kes_period_info "$source_dir/node.cert" | tee "$info_file"
+  assert_valid_kes_info "$info_file"
+  log "OK: source operational certificate is valid for the current KES period"
 }
 
 kes_install() {
   require_var SOURCE_DIR
   [[ "${INSTALL:-}" == "1" ]] || die "Refusing to install KES files. Re-run with INSTALL=1 CONFIRM=INSTALL_KES."
   [[ "${CONFIRM:-}" == "INSTALL_KES" ]] || die "Refusing to install KES files. Expected CONFIRM=INSTALL_KES."
+  require_base_env
   require_kes_files
+  require_recent_kes_backup
 
   local source_dir source_vkey source_skey source_cert
   source_dir="$(resolve_path "$SOURCE_DIR")"
+  require_kes_source_dir "$source_dir"
   source_vkey="$source_dir/kes.vkey"
   source_skey="$source_dir/kes.skey"
   source_cert="$source_dir/node.cert"
-
-  [[ -f "$source_vkey" ]] || die "Missing source KES verification key: $source_vkey"
-  [[ -f "$source_skey" ]] || die "Missing source KES signing key: $source_skey"
-  [[ -f "$source_cert" ]] || die "Missing source operational certificate: $source_cert"
 
   cp "$source_vkey" "$(resolve_path "$KES_VKEY_FILE")"
   cp "$source_skey" "$(resolve_path "$KES_SKEY_FILE")"
   cp "$source_cert" "$(resolve_path "$NODE_CERT_FILE")"
 
   log "Installed KES files from $source_dir"
+  kes_verify
+  print_kes_restart_checklist
 }
 
 kes_verify() {
@@ -599,9 +771,11 @@ main() {
     build-stake-dereg) build_stake_dereg ;;
     sign-stake-dereg) sign_stake_dereg ;;
     submit-stake-dereg) submit_stake_dereg ;;
+    kes-plan) kes_plan ;;
     kes-status) kes_status ;;
     kes-backup) kes_backup ;;
     kes-generate) kes_generate ;;
+    kes-verify-source) kes_verify_source ;;
     kes-install) kes_install ;;
     kes-verify) kes_verify ;;
     -h|--help|help|"") usage ;;

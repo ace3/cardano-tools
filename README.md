@@ -194,22 +194,98 @@ Typical topology:
 
 KES renewal affects the block producer key material. Relays are restarted before the block producer only as an operational safety sequence; this toolkit does not automate service control.
 
+Server-specific operator map:
+
+| Server | Purpose | Commands |
+| --- | --- | --- |
+| `cardano-relay1` | Online status source, optional staging host | `make kes-plan`, `make kes-status` |
+| `cardano-relay2` | Relay restart/check only | Manual service restart/check |
+| `cardano-blockproducer` / validator | Live KES backup, install, and verification | `make kes-backup`, `make kes-verify-source`, `make kes-install`, `make kes-verify` |
+| Cold/offline key location | Holds `cold.skey` and `cold.counter` | `make kes-generate` |
+
+Do not copy `cold.skey` to relays or to the block producer. Transfer only the generated `kes.vkey`, `kes.skey`, and `node.cert` to the block producer staging directory.
+
+### Operator Flow By Server
+
+On `cardano-relay1` or `cardano-blockproducer`, create the operator plan and record the current KES period:
+
+```bash
+make kes-plan
+make kes-status
+cat artifacts/kes-renewal/start-kes-period.txt
+```
+
+On the cold/offline key location, generate the new KES files:
+
+```bash
+make kes-generate START_KES_PERIOD=<period>
+```
+
+Copy only these generated files to the block producer staging directory:
+
+```text
+artifacts/kes-renewal/kes.vkey
+artifacts/kes-renewal/kes.skey
+artifacts/kes-renewal/node.cert
+```
+
+Example manual copy flow:
+
+```bash
+ssh <bastion-or-access-command> cardano-blockproducer
+mkdir -p /root/kes-renewal-<yyyymmdd>
+scp artifacts/kes-renewal/kes.vkey root@<blockproducer-ip>:/root/kes-renewal-<yyyymmdd>/
+scp artifacts/kes-renewal/kes.skey root@<blockproducer-ip>:/root/kes-renewal-<yyyymmdd>/
+scp artifacts/kes-renewal/node.cert root@<blockproducer-ip>:/root/kes-renewal-<yyyymmdd>/
+```
+
+On `cardano-blockproducer`, back up current live files, verify the staged files, then install:
+
+```bash
+make kes-backup BACKUP_LABEL=<yyyymmdd>
+make kes-verify-source SOURCE_DIR=/root/kes-renewal-<yyyymmdd>
+make kes-install SOURCE_DIR=/root/kes-renewal-<yyyymmdd> INSTALL=1 CONFIRM=INSTALL_KES
+```
+
+Restart manually:
+
+```text
+stop cardano-blockproducer
+restart cardano-relay1
+restart cardano-relay2
+start cardano-blockproducer
+```
+
+Use the existing operational method on each server: `ps -aux | grep cardano`, `kill -s SIGINT <pid>`, then `bash startcardano.sh`.
+
+On `cardano-blockproducer` after restart:
+
+```bash
+make kes-verify
+cardano-cli query tip --mainnet
+./gLiveView.sh
+tail -f relay-node.log
+```
+
 ### Step 1: Inspect Current KES Status
 
 Run this on an online relay or block producer that has a synced node socket, `cardano-cli`, `jq`, `SHELLEY_GENESIS_FILE`, and `NODE_CERT_FILE` configured:
 
 ```bash
+make kes-plan
 make kes-status
 ```
 
 What this does:
 
+- `make kes-plan` writes `artifacts/kes-renewal/operator-plan.txt` with the server-specific command sequence, configured paths, current KES expiry, op-cert counters, and computed `START_KES_PERIOD`.
 - Queries the current chain tip.
 - Reads `slotsPerKESPeriod` from the Shelley genesis file.
 - Computes `START_KES_PERIOD = slot / slotsPerKESPeriod`.
 - Queries `cardano-cli query kes-period-info` for the installed `node.cert`.
 - Writes:
   - `artifacts/tip.json`
+  - `artifacts/kes-renewal/operator-plan.txt`
   - `artifacts/kes-renewal/kes-period-info.json`
   - `artifacts/kes-renewal/start-kes-period.txt`
 
@@ -235,6 +311,8 @@ What this does:
 - Runs `cardano-cli node issue-op-cert`.
 - Uses the current CLI flag `--operational-certificate-issue-counter-file`.
 - Writes the new files under `artifacts/kes-renewal/`.
+- Validates `START_KES_PERIOD` against the latest computed period when an online node socket and genesis file are available. If generation is fully offline, this live check is skipped.
+- Writes `artifacts/kes-renewal/manifest.json`.
 
 Generated files:
 
@@ -242,6 +320,7 @@ Generated files:
 artifacts/kes-renewal/kes.vkey
 artifacts/kes-renewal/kes.skey
 artifacts/kes-renewal/node.cert
+artifacts/kes-renewal/manifest.json
 ```
 
 These files do not overwrite live block producer files. Transfer only these generated files to the block producer. Do not transfer `cold.skey`.
@@ -264,6 +343,7 @@ What this does:
 
 - Copies the current live `kes.vkey`, `kes.skey`, and `node.cert`.
 - Writes them to `BACKUP_ROOT/<BACKUP_LABEL>/`.
+- Writes `artifacts/kes-renewal/last-backup-dir.txt`.
 - Refuses to overwrite an existing backup directory.
 
 Expected backup files:
@@ -276,7 +356,13 @@ Expected backup files:
 
 ### Step 4: Install The New Files On The Block Producer
 
-After manually transferring the generated renewal directory to the block producer, install it with an explicit confirmation gate:
+After manually transferring the generated renewal directory to the block producer, verify it first:
+
+```bash
+make kes-verify-source SOURCE_DIR=<renewal-dir>
+```
+
+Then install it with an explicit confirmation gate:
 
 ```bash
 make kes-install SOURCE_DIR=<renewal-dir> INSTALL=1 CONFIRM=INSTALL_KES
@@ -291,11 +377,14 @@ make kes-install SOURCE_DIR=/root/kes-renewal-20260511 INSTALL=1 CONFIRM=INSTALL
 What this does:
 
 - Requires `INSTALL=1 CONFIRM=INSTALL_KES`.
+- Requires a previous `make kes-backup` marker.
 - Requires `SOURCE_DIR/kes.vkey`, `SOURCE_DIR/kes.skey`, and `SOURCE_DIR/node.cert`.
 - Copies those files to the configured live paths:
   - `KES_VKEY_FILE`
   - `KES_SKEY_FILE`
   - `NODE_CERT_FILE`
+- Runs installed-certificate verification after copying.
+- Prints the manual restart checklist.
 
 It does not restart Cardano services.
 
@@ -352,14 +441,20 @@ Do not decrement or hand-edit `cold.counter`. Treat it as managed by `cardano-cl
 make kes-status
   Online check. Computes START_KES_PERIOD and writes current KES status artifacts.
 
+make kes-plan
+  Online operator plan. Writes current KES status, configured paths, and server-specific next commands.
+
 make kes-generate START_KES_PERIOD=<period>
-  Cold/offline generation. Creates kes.vkey, kes.skey, and node.cert under artifacts/kes-renewal/.
+  Cold/offline generation. Creates kes.vkey, kes.skey, node.cert, and manifest.json under artifacts/kes-renewal/.
 
 make kes-backup BACKUP_LABEL=<label>
-  Block producer backup. Refuses to overwrite BACKUP_ROOT/<label>.
+  Block producer backup. Refuses to overwrite BACKUP_ROOT/<label> and records the latest backup marker.
+
+make kes-verify-source SOURCE_DIR=<dir>
+  Block producer staging check. Verifies SOURCE_DIR/kes.vkey, SOURCE_DIR/kes.skey, and SOURCE_DIR/node.cert before install.
 
 make kes-install SOURCE_DIR=<dir> INSTALL=1 CONFIRM=INSTALL_KES
-  Block producer install. Copies generated KES files into configured live paths.
+  Block producer install. Requires a backup marker, copies generated KES files into configured live paths, then verifies the installed cert.
 
 make kes-verify
   Online verification. Checks installed node.cert against current KES period and counters.

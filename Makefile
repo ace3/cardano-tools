@@ -2,7 +2,7 @@ SHELL := /bin/bash
 SCRIPT := scripts/cardano-pool-decommission.sh
 RUN := ENV_FILE="$(ENV_FILE)" CARDANO_CLI="$(CARDANO_CLI)" RETIRE_EPOCH="$(RETIRE_EPOCH)" TX_IN="$(TX_IN)" REWARD_BALANCE="$(REWARD_BALANCE)" SUBMIT="$(SUBMIT)" CONFIRM="$(CONFIRM)" ALLOW_STAKE_DEREG="$(ALLOW_STAKE_DEREG)" BACKUP_LABEL="$(BACKUP_LABEL)" START_KES_PERIOD="$(START_KES_PERIOD)" SOURCE_DIR="$(SOURCE_DIR)" INSTALL="$(INSTALL)" $(SCRIPT)
 
-.PHONY: help check status retirement-cert retirement-build retirement-sign retirement-submit withdraw-build withdraw-sign withdraw-submit stake-dereg-cert stake-dereg-build stake-dereg-sign stake-dereg-submit kes-status kes-backup kes-generate kes-install kes-verify test
+.PHONY: help check status retirement-cert retirement-build retirement-sign retirement-submit withdraw-build withdraw-sign withdraw-submit stake-dereg-cert stake-dereg-build stake-dereg-sign stake-dereg-submit kes-plan kes-status kes-backup kes-generate kes-verify-source kes-install kes-verify test
 
 help:
 	@echo "Cardano pool decommission commands"
@@ -29,9 +29,11 @@ help:
 	@echo "  make stake-dereg-submit SUBMIT=1 CONFIRM=DEREGISTER_STAKE ALLOW_STAKE_DEREG=1"
 	@echo
 	@echo "KES renewal:"
+	@echo "  make kes-plan"
 	@echo "  make kes-status"
 	@echo "  make kes-backup BACKUP_LABEL=..."
 	@echo "  make kes-generate START_KES_PERIOD=..."
+	@echo "  make kes-verify-source SOURCE_DIR=..."
 	@echo "  make kes-install SOURCE_DIR=... INSTALL=1 CONFIRM=INSTALL_KES"
 	@echo "  make kes-verify"
 	@echo
@@ -77,6 +79,9 @@ stake-dereg-sign:
 stake-dereg-submit:
 	@$(RUN) submit-stake-dereg
 
+kes-plan:
+	@$(RUN) kes-plan
+
 kes-status:
 	@$(RUN) kes-status
 
@@ -85,6 +90,9 @@ kes-backup:
 
 kes-generate:
 	@$(RUN) kes-generate
+
+kes-verify-source:
+	@$(RUN) kes-verify-source
 
 kes-install:
 	@$(RUN) kes-install
