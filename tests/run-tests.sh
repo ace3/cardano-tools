@@ -31,7 +31,9 @@ mkdir -p "$BIN_DIR" "$KEY_DIR" "$OUT_DIR"
 touch "$TMP_DIR/node.socket"
 printf 'addr_test1payment\n' > "$KEY_DIR/payment.addr"
 printf 'stake_test1stake\n' > "$KEY_DIR/stake.addr"
-touch "$KEY_DIR/payment.skey" "$KEY_DIR/stake.vkey" "$KEY_DIR/stake.skey" "$KEY_DIR/cold.vkey" "$KEY_DIR/cold.skey"
+printf '{"slotsPerKESPeriod":129600}\n' > "$TMP_DIR/mainnet-shelley-genesis.json"
+touch "$KEY_DIR/payment.skey" "$KEY_DIR/stake.vkey" "$KEY_DIR/stake.skey" "$KEY_DIR/cold.vkey" "$KEY_DIR/cold.skey" "$KEY_DIR/cold.counter"
+touch "$KEY_DIR/kes.vkey" "$KEY_DIR/kes.skey" "$KEY_DIR/node.cert"
 
 cat > "$TMP_DIR/test.env" <<EOF
 NETWORK=mainnet
@@ -43,6 +45,12 @@ STAKE_VKEY_FILE=$KEY_DIR/stake.vkey
 STAKE_SKEY_FILE=$KEY_DIR/stake.skey
 COLD_VKEY_FILE=$KEY_DIR/cold.vkey
 COLD_SKEY_FILE=$KEY_DIR/cold.skey
+COLD_COUNTER_FILE=$KEY_DIR/cold.counter
+SHELLEY_GENESIS_FILE=$TMP_DIR/mainnet-shelley-genesis.json
+NODE_CERT_FILE=$KEY_DIR/node.cert
+KES_VKEY_FILE=$KEY_DIR/kes.vkey
+KES_SKEY_FILE=$KEY_DIR/kes.skey
+BACKUP_ROOT=$TMP_DIR/backup
 OUT_DIR=$OUT_DIR
 EOF
 
@@ -55,7 +63,7 @@ printf '%q ' "$@" >> "$log_file"
 printf '\n' >> "$log_file"
 
 if [[ "$1 $2" == "query tip" ]]; then
-  printf '{"epoch":100,"slot":1}\n'
+  printf '{"epoch":100,"slot":179712000}\n'
   exit 0
 fi
 
@@ -83,6 +91,33 @@ if [[ "$1 $2" == "query stake-address-info" ]]; then
   exit 0
 fi
 
+if [[ "$1 $2" == "query kes-period-info" ]]; then
+  printf '{"qKesCurrentKesPeriod":1386,"qKesEndKesInterval":1448,"qKesKesKeyExpiry":"2026-11-01T00:00:00Z","qKesMaxKESEvolutions":62,"qKesNodeStateOperationalCertificateNumber":50,"qKesOnDiskOperationalCertificateNumber":50,"qKesRemainingSlotsInKesPeriod":1000,"qKesSlotsPerKesPeriod":129600,"qKesStartKesInterval":1386}\n'
+  exit 0
+fi
+
+if [[ "$1 $2" == "node key-gen-KES" ]]; then
+  vkey=""
+  skey=""
+  while (($#)); do
+    case "$1" in
+      --verification-key-file)
+        shift
+        vkey="$1"
+        ;;
+      --signing-key-file)
+        shift
+        skey="$1"
+        ;;
+    esac
+    shift || true
+  done
+  [[ -n "$vkey" && -n "$skey" ]] || exit 1
+  printf '{}\n' > "$vkey"
+  printf '{}\n' > "$skey"
+  exit 0
+fi
+
 out=""
 while (($#)); do
   if [[ "$1" == "--out-file" ]]; then
@@ -105,6 +140,40 @@ export ENV_FILE="$TMP_DIR/test.env"
 : > "$MOCK_CARDANO_LOG"
 "$SCRIPT" check-env > "$TMP_DIR/check.out"
 assert_contains "OK: environment is ready" "$TMP_DIR/check.out"
+
+"$SCRIPT" kes-status > "$TMP_DIR/kes-status.out"
+assert_contains "START_KES_PERIOD=1386" "$TMP_DIR/kes-status.out"
+test "$(cat "$OUT_DIR/kes-renewal/start-kes-period.txt")" = "1386" || fail "start KES period was not written"
+test -f "$OUT_DIR/kes-renewal/kes-period-info.json" || fail "KES period info was not written"
+
+START_KES_PERIOD=1386 "$SCRIPT" kes-generate > "$TMP_DIR/kes-generate.out"
+test -f "$OUT_DIR/kes-renewal/kes.vkey" || fail "generated kes.vkey was not created"
+test -f "$OUT_DIR/kes-renewal/kes.skey" || fail "generated kes.skey was not created"
+test -f "$OUT_DIR/kes-renewal/node.cert" || fail "generated node.cert was not created"
+assert_command_logged "node key-gen-KES"
+assert_command_logged "node issue-op-cert"
+assert_command_logged "--operational-certificate-issue-counter-file $KEY_DIR/cold.counter"
+
+BACKUP_LABEL=20260511 "$SCRIPT" kes-backup > "$TMP_DIR/kes-backup.out"
+test -f "$TMP_DIR/backup/20260511/kes.vkey" || fail "backup kes.vkey was not created"
+test -f "$TMP_DIR/backup/20260511/kes.skey" || fail "backup kes.skey was not created"
+test -f "$TMP_DIR/backup/20260511/node.cert" || fail "backup node.cert was not created"
+
+if BACKUP_LABEL=20260511 "$SCRIPT" kes-backup > "$TMP_DIR/kes-backup-denied.out" 2>&1; then
+  fail "KES backup should refuse to overwrite an existing backup"
+fi
+assert_contains "Backup destination already exists" "$TMP_DIR/kes-backup-denied.out"
+
+if SOURCE_DIR="$OUT_DIR/kes-renewal" "$SCRIPT" kes-install > "$TMP_DIR/kes-install-denied.out" 2>&1; then
+  fail "KES install should require gate"
+fi
+assert_contains "INSTALL=1 CONFIRM=INSTALL_KES" "$TMP_DIR/kes-install-denied.out"
+
+SOURCE_DIR="$OUT_DIR/kes-renewal" INSTALL=1 CONFIRM=INSTALL_KES "$SCRIPT" kes-install > "$TMP_DIR/kes-install.out"
+assert_contains "Installed KES files" "$TMP_DIR/kes-install.out"
+
+"$SCRIPT" kes-verify > "$TMP_DIR/kes-verify.out"
+assert_contains "OK: installed operational certificate is valid" "$TMP_DIR/kes-verify.out"
 
 RETIRE_EPOCH=101 "$SCRIPT" make-retirement-cert > "$TMP_DIR/retire-cert.out"
 test -f "$OUT_DIR/pool.dereg" || fail "pool.dereg was not created"

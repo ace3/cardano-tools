@@ -43,6 +43,11 @@ Commands:
   build-stake-dereg          TX_IN=<hash#index> [REWARD_BALANCE=<lovelace>]
   sign-stake-dereg
   submit-stake-dereg         SUBMIT=1 CONFIRM=DEREGISTER_STAKE ALLOW_STAKE_DEREG=1
+  kes-status
+  kes-backup                 BACKUP_LABEL=<label>
+  kes-generate               START_KES_PERIOD=<period>
+  kes-install                SOURCE_DIR=<dir> INSTALL=1 CONFIRM=INSTALL_KES
+  kes-verify
 EOF
 }
 
@@ -72,6 +77,14 @@ out_dir() {
 
 artifact() {
   printf '%s/%s\n' "$(out_dir)" "$1"
+}
+
+kes_out_dir() {
+  printf '%s/kes-renewal\n' "$(out_dir)"
+}
+
+kes_artifact() {
+  printf '%s/%s\n' "$(kes_out_dir)" "$1"
 }
 
 require_command() {
@@ -122,6 +135,20 @@ require_stake_keys() {
   require_file_var STAKE_SKEY_FILE
 }
 
+require_kes_files() {
+  require_file_var NODE_CERT_FILE
+  require_file_var KES_VKEY_FILE
+  require_file_var KES_SKEY_FILE
+}
+
+require_cold_counter() {
+  require_file_var COLD_COUNTER_FILE
+}
+
+require_genesis_file() {
+  require_file_var SHELLEY_GENESIS_FILE
+}
+
 payment_addr() {
   local file
   file="$(resolve_path "$PAYMENT_ADDR_FILE")"
@@ -136,6 +163,10 @@ stake_addr() {
 
 ensure_out_dir() {
   mkdir -p "$(out_dir)"
+}
+
+ensure_kes_out_dir() {
+  mkdir -p "$(kes_out_dir)"
 }
 
 query_tip() {
@@ -194,6 +225,59 @@ require_reward_balance() {
   require_integer REWARD_BALANCE "$REWARD_BALANCE"
 }
 
+start_kes_period() {
+  require_base_env
+  require_genesis_file
+
+  local slot slots_per_kes_period
+  slot="$(query_tip | jq -r '.slot')"
+  slots_per_kes_period="$(jq -r '.slotsPerKESPeriod' "$(resolve_path "$SHELLEY_GENESIS_FILE")")"
+  require_integer slot "$slot"
+  require_integer slotsPerKESPeriod "$slots_per_kes_period"
+  (( slots_per_kes_period > 0 )) || die "slotsPerKESPeriod must be greater than zero"
+
+  printf '%s\n' "$((slot / slots_per_kes_period))"
+}
+
+query_kes_period_info() {
+  local op_cert_file="$1"
+  "$CARDANO_CLI" query kes-period-info \
+    $(network_args) \
+    --socket-path "$CARDANO_NODE_SOCKET_PATH" \
+    --op-cert-file "$op_cert_file" \
+    --output-json
+}
+
+assert_valid_kes_info() {
+  local file="$1"
+  local current start end node_counter on_disk_counter
+  current="$(jq -r '.qKesCurrentKesPeriod' "$file")"
+  start="$(jq -r '.qKesStartKesInterval' "$file")"
+  end="$(jq -r '.qKesEndKesInterval' "$file")"
+  node_counter="$(jq -r '.qKesNodeStateOperationalCertificateNumber // empty' "$file")"
+  on_disk_counter="$(jq -r '.qKesOnDiskOperationalCertificateNumber' "$file")"
+
+  require_integer qKesCurrentKesPeriod "$current"
+  require_integer qKesStartKesInterval "$start"
+  require_integer qKesEndKesInterval "$end"
+  require_integer qKesOnDiskOperationalCertificateNumber "$on_disk_counter"
+
+  if (( current < start )); then
+    die "Operational certificate KES period starts in the future (current=$current, start=$start)."
+  fi
+
+  if (( current > end )); then
+    die "Operational certificate KES period is expired (current=$current, end=$end)."
+  fi
+
+  if [[ -n "$node_counter" ]]; then
+    require_integer qKesNodeStateOperationalCertificateNumber "$node_counter"
+    if [[ "$node_counter" != "$on_disk_counter" ]]; then
+      die "Operational certificate counter mismatch (node=$node_counter, on_disk=$on_disk_counter)."
+    fi
+  fi
+}
+
 check_env() {
   require_base_env
   require_addresses
@@ -232,6 +316,103 @@ status() {
   "$CARDANO_CLI" query stake-address-info \
     $(network_args) \
     --address "$(stake_addr)" | tee "$(artifact stake-address-info.json)"
+}
+
+kes_status() {
+  require_base_env
+  require_genesis_file
+  require_file_var NODE_CERT_FILE
+  ensure_kes_out_dir
+
+  local tip_file info_file start_period
+  tip_file="$(artifact tip.json)"
+  info_file="$(kes_artifact kes-period-info.json)"
+  start_period="$(start_kes_period)"
+
+  query_tip | tee "$tip_file"
+  query_kes_period_info "$(resolve_path "$NODE_CERT_FILE")" | tee "$info_file"
+
+  log "START_KES_PERIOD=$start_period"
+  printf '%s\n' "$start_period" > "$(kes_artifact start-kes-period.txt)"
+  log "Wrote $(kes_artifact start-kes-period.txt)"
+  log "Wrote $info_file"
+}
+
+kes_backup() {
+  require_var BACKUP_LABEL
+  require_var BACKUP_ROOT
+  require_kes_files
+
+  local backup_dir
+  backup_dir="$(resolve_path "$BACKUP_ROOT")/$BACKUP_LABEL"
+  [[ ! -e "$backup_dir" ]] || die "Backup destination already exists: $backup_dir"
+  mkdir -p "$backup_dir"
+
+  cp "$(resolve_path "$KES_VKEY_FILE")" "$backup_dir/kes.vkey"
+  cp "$(resolve_path "$KES_SKEY_FILE")" "$backup_dir/kes.skey"
+  cp "$(resolve_path "$NODE_CERT_FILE")" "$backup_dir/node.cert"
+
+  log "Wrote KES backup: $backup_dir"
+}
+
+kes_generate() {
+  command -v "$CARDANO_CLI" >/dev/null 2>&1 || die "Missing required command: $CARDANO_CLI"
+  network_args >/dev/null
+  require_var START_KES_PERIOD
+  require_integer START_KES_PERIOD "$START_KES_PERIOD"
+  require_cold_keys
+  require_cold_counter
+  ensure_kes_out_dir
+
+  "$CARDANO_CLI" node key-gen-KES \
+    --verification-key-file "$(kes_artifact kes.vkey)" \
+    --signing-key-file "$(kes_artifact kes.skey)"
+
+  "$CARDANO_CLI" node issue-op-cert \
+    --kes-verification-key-file "$(kes_artifact kes.vkey)" \
+    --cold-signing-key-file "$(resolve_path "$COLD_SKEY_FILE")" \
+    --operational-certificate-issue-counter-file "$(resolve_path "$COLD_COUNTER_FILE")" \
+    --kes-period "$START_KES_PERIOD" \
+    --out-file "$(kes_artifact node.cert)"
+
+  log "Wrote $(kes_artifact kes.vkey)"
+  log "Wrote $(kes_artifact kes.skey)"
+  log "Wrote $(kes_artifact node.cert)"
+}
+
+kes_install() {
+  require_var SOURCE_DIR
+  [[ "${INSTALL:-}" == "1" ]] || die "Refusing to install KES files. Re-run with INSTALL=1 CONFIRM=INSTALL_KES."
+  [[ "${CONFIRM:-}" == "INSTALL_KES" ]] || die "Refusing to install KES files. Expected CONFIRM=INSTALL_KES."
+  require_kes_files
+
+  local source_dir source_vkey source_skey source_cert
+  source_dir="$(resolve_path "$SOURCE_DIR")"
+  source_vkey="$source_dir/kes.vkey"
+  source_skey="$source_dir/kes.skey"
+  source_cert="$source_dir/node.cert"
+
+  [[ -f "$source_vkey" ]] || die "Missing source KES verification key: $source_vkey"
+  [[ -f "$source_skey" ]] || die "Missing source KES signing key: $source_skey"
+  [[ -f "$source_cert" ]] || die "Missing source operational certificate: $source_cert"
+
+  cp "$source_vkey" "$(resolve_path "$KES_VKEY_FILE")"
+  cp "$source_skey" "$(resolve_path "$KES_SKEY_FILE")"
+  cp "$source_cert" "$(resolve_path "$NODE_CERT_FILE")"
+
+  log "Installed KES files from $source_dir"
+}
+
+kes_verify() {
+  require_base_env
+  require_file_var NODE_CERT_FILE
+  ensure_kes_out_dir
+
+  local info_file
+  info_file="$(kes_artifact kes-verify.json)"
+  query_kes_period_info "$(resolve_path "$NODE_CERT_FILE")" | tee "$info_file"
+  assert_valid_kes_info "$info_file"
+  log "OK: installed operational certificate is valid for the current KES period"
 }
 
 make_retirement_cert() {
@@ -418,6 +599,11 @@ main() {
     build-stake-dereg) build_stake_dereg ;;
     sign-stake-dereg) sign_stake_dereg ;;
     submit-stake-dereg) submit_stake_dereg ;;
+    kes-status) kes_status ;;
+    kes-backup) kes_backup ;;
+    kes-generate) kes_generate ;;
+    kes-install) kes_install ;;
+    kes-verify) kes_verify ;;
     -h|--help|help|"") usage ;;
     *) usage >&2; die "Unknown command: $command" ;;
   esac
