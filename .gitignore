@@ -1,0 +1,10 @@
+.env
+artifacts/
+*.skey
+*.raw
+*.signed
+*.dereg
+*.cert
+protocol.json
+tip.json
+stake-address-info.json
