@@ -257,7 +257,7 @@ build_retirement() {
   validate_retirement_epoch "$RETIRE_EPOCH"
   [[ -f "$(artifact pool.dereg)" ]] || die "Missing retirement certificate: $(artifact pool.dereg). Run make retirement-cert first."
 
-  "$CARDANO_CLI" transaction build \
+  "$CARDANO_CLI" latest transaction build \
     $(network_args) \
     --tx-in "$TX_IN" \
     --change-address "$(payment_addr)" \
@@ -274,7 +274,7 @@ sign_retirement() {
   require_cold_keys
   [[ -f "$(artifact retirement.raw)" ]] || die "Missing tx body: $(artifact retirement.raw). Run make retirement-build first."
 
-  "$CARDANO_CLI" transaction sign \
+  "$CARDANO_CLI" latest transaction sign \
     $(network_args) \
     --tx-body-file "$(artifact retirement.raw)" \
     --signing-key-file "$(resolve_path "$PAYMENT_SKEY_FILE")" \
@@ -297,7 +297,7 @@ submit_tx() {
   require_submit_gate "$gate"
   [[ -f "$file" ]] || die "Missing signed tx: $file"
 
-  "$CARDANO_CLI" transaction submit \
+  "$CARDANO_CLI" latest transaction submit \
     $(network_args) \
     --tx-file "$file"
 }
@@ -312,7 +312,7 @@ build_withdraw() {
   require_tx_in
   require_reward_balance
 
-  "$CARDANO_CLI" transaction build \
+  "$CARDANO_CLI" latest transaction build \
     $(network_args) \
     --tx-in "$TX_IN" \
     --change-address "$(payment_addr)" \
@@ -329,7 +329,7 @@ sign_withdraw() {
   require_stake_keys
   [[ -f "$(artifact withdraw.raw)" ]] || die "Missing tx body: $(artifact withdraw.raw). Run make withdraw-build first."
 
-  "$CARDANO_CLI" transaction sign \
+  "$CARDANO_CLI" latest transaction sign \
     $(network_args) \
     --tx-body-file "$(artifact withdraw.raw)" \
     --signing-key-file "$(resolve_path "$PAYMENT_SKEY_FILE")" \
@@ -348,7 +348,7 @@ make_stake_dereg_cert() {
   require_stake_keys
   ensure_out_dir
 
-  "$CARDANO_CLI" stake-address deregistration-certificate \
+  "$CARDANO_CLI" latest stake-address deregistration-certificate \
     --stake-verification-key-file "$(resolve_path "$STAKE_VKEY_FILE")" \
     --out-file "$(artifact stake-dereg.cert)"
 
@@ -363,7 +363,7 @@ build_stake_dereg() {
   [[ -f "$(artifact stake-dereg.cert)" ]] || die "Missing stake deregistration cert: $(artifact stake-dereg.cert). Run make stake-dereg-cert first."
 
   local args=(
-    transaction build
+    latest transaction build
     $(network_args)
     --tx-in "$TX_IN"
     --change-address "$(payment_addr)"
@@ -387,7 +387,7 @@ sign_stake_dereg() {
   require_stake_keys
   [[ -f "$(artifact stake-dereg.raw)" ]] || die "Missing tx body: $(artifact stake-dereg.raw). Run make stake-dereg-build first."
 
-  "$CARDANO_CLI" transaction sign \
+  "$CARDANO_CLI" latest transaction sign \
     $(network_args) \
     --tx-body-file "$(artifact stake-dereg.raw)" \
     --signing-key-file "$(resolve_path "$PAYMENT_SKEY_FILE")" \

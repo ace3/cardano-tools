@@ -15,6 +15,11 @@ assert_contains() {
   grep -F -- "$needle" "$file" >/dev/null || fail "Expected '$needle' in $file"
 }
 
+assert_command_logged() {
+  local needle="$1"
+  grep -F -- "$needle" "$MOCK_CARDANO_LOG" >/dev/null || fail "Expected command '$needle' in $MOCK_CARDANO_LOG"
+}
+
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -117,22 +122,28 @@ assert_contains "Allowed range: 101..118" "$TMP_DIR/far-epoch.out"
 
 RETIRE_EPOCH=101 TX_IN=abc#0 "$SCRIPT" build-retirement > "$TMP_DIR/build-retirement.out"
 test -f "$OUT_DIR/retirement.raw" || fail "retirement.raw was not created"
-assert_contains "--certificate-file $OUT_DIR/pool.dereg" "$MOCK_CARDANO_LOG"
+assert_command_logged "latest transaction build"
+assert_command_logged "--certificate-file $OUT_DIR/pool.dereg"
 
 "$SCRIPT" sign-retirement > "$TMP_DIR/sign-retirement.out"
 test -f "$OUT_DIR/retirement.signed" || fail "retirement.signed was not created"
+assert_command_logged "latest transaction sign"
 
 if "$SCRIPT" submit-retirement > "$TMP_DIR/submit-denied.out" 2>&1; then
   fail "submit should require gate"
 fi
 assert_contains "Refusing to submit" "$TMP_DIR/submit-denied.out"
 
+SUBMIT=1 CONFIRM=RETIRE_POOL "$SCRIPT" submit-retirement > "$TMP_DIR/submit-retirement.out"
+assert_command_logged "latest transaction submit"
+
 TX_IN=abc#0 REWARD_BALANCE=500000000 "$SCRIPT" build-withdraw > "$TMP_DIR/build-withdraw.out"
 test -f "$OUT_DIR/withdraw.raw" || fail "withdraw.raw was not created"
-assert_contains "--withdrawal stake_test1stake+500000000" "$MOCK_CARDANO_LOG"
+assert_command_logged "--withdrawal stake_test1stake+500000000"
 
 "$SCRIPT" make-stake-dereg-cert > "$TMP_DIR/stake-dereg-cert.out"
 test -f "$OUT_DIR/stake-dereg.cert" || fail "stake-dereg.cert was not created"
+assert_command_logged "latest stake-address deregistration-certificate"
 
 if TX_IN=abc#0 "$SCRIPT" build-stake-dereg > "$TMP_DIR/stake-dereg-denied.out" 2>&1; then
   fail "stake dereg build should require ALLOW_STAKE_DEREG=1"

@@ -66,7 +66,7 @@ cardano-cli query utxo \
 Build the transaction:
 
 ```bash
-cardano-cli transaction build \
+cardano-cli latest transaction build \
   --mainnet \
   --tx-in <TXHASH>#<TXIX> \
   --change-address "$(cat payment.addr)" \
@@ -78,7 +78,7 @@ cardano-cli transaction build \
 Sign with the payment signing key and cold signing key:
 
 ```bash
-cardano-cli transaction sign \
+cardano-cli latest transaction sign \
   --mainnet \
   --tx-body-file tx.raw \
   --signing-key-file payment.skey \
@@ -89,7 +89,7 @@ cardano-cli transaction sign \
 Submit:
 
 ```bash
-cardano-cli transaction submit \
+cardano-cli latest transaction submit \
   --mainnet \
   --tx-file tx.signed
 ```
@@ -121,7 +121,7 @@ Wait until the reward balance includes the returned 500 ADA pool deposit and any
 Withdraw rewards and deposit:
 
 ```bash
-cardano-cli transaction build \
+cardano-cli latest transaction build \
   --mainnet \
   --tx-in <TXHASH>#<TXIX> \
   --change-address "$(cat payment.addr)" \
@@ -129,14 +129,14 @@ cardano-cli transaction build \
   --witness-override 2 \
   --out-file withdraw.raw
 
-cardano-cli transaction sign \
+cardano-cli latest transaction sign \
   --mainnet \
   --tx-body-file withdraw.raw \
   --signing-key-file payment.skey \
   --signing-key-file stake.skey \
   --out-file withdraw.signed
 
-cardano-cli transaction submit \
+cardano-cli latest transaction submit \
   --mainnet \
   --tx-file withdraw.signed
 ```
@@ -148,7 +148,7 @@ Repeat withdrawal in later epochs if residual rewards continue to appear.
 Only after the pool deposit and rewards are withdrawn, create the stake deregistration certificate:
 
 ```bash
-cardano-cli stake-address deregistration-certificate \
+cardano-cli latest stake-address deregistration-certificate \
   --stake-verification-key-file stake.vkey \
   --out-file stake-dereg.cert
 ```
