@@ -205,6 +205,7 @@ assert_contains "OK: installed operational certificate is valid" "$TMP_DIR/kes-v
 RETIRE_EPOCH=101 "$SCRIPT" make-retirement-cert > "$TMP_DIR/retire-cert.out"
 test -f "$OUT_DIR/pool.dereg" || fail "pool.dereg was not created"
 assert_contains "RETIRE_EPOCH=101 is valid" "$TMP_DIR/retire-cert.out"
+assert_command_logged "conway stake-pool deregistration-certificate"
 
 if RETIRE_EPOCH=100 "$SCRIPT" make-retirement-cert > "$TMP_DIR/bad-epoch.out" 2>&1; then
   fail "current epoch retirement should fail"
@@ -218,12 +219,12 @@ assert_contains "Allowed range: 101..118" "$TMP_DIR/far-epoch.out"
 
 RETIRE_EPOCH=101 TX_IN=abc#0 "$SCRIPT" build-retirement > "$TMP_DIR/build-retirement.out"
 test -f "$OUT_DIR/retirement.raw" || fail "retirement.raw was not created"
-assert_command_logged "latest transaction build"
+assert_command_logged "conway transaction build"
 assert_command_logged "--certificate-file $OUT_DIR/pool.dereg"
 
 "$SCRIPT" sign-retirement > "$TMP_DIR/sign-retirement.out"
 test -f "$OUT_DIR/retirement.signed" || fail "retirement.signed was not created"
-assert_command_logged "latest transaction sign"
+assert_command_logged "conway transaction sign"
 
 if "$SCRIPT" submit-retirement > "$TMP_DIR/submit-denied.out" 2>&1; then
   fail "submit should require gate"
@@ -231,7 +232,7 @@ fi
 assert_contains "Refusing to submit" "$TMP_DIR/submit-denied.out"
 
 SUBMIT=1 CONFIRM=RETIRE_POOL "$SCRIPT" submit-retirement > "$TMP_DIR/submit-retirement.out"
-assert_command_logged "latest transaction submit"
+assert_command_logged "conway transaction submit"
 
 TX_IN=abc#0 REWARD_BALANCE=500000000 "$SCRIPT" build-withdraw > "$TMP_DIR/build-withdraw.out"
 test -f "$OUT_DIR/withdraw.raw" || fail "withdraw.raw was not created"
@@ -239,7 +240,7 @@ assert_command_logged "--withdrawal stake_test1stake+500000000"
 
 "$SCRIPT" make-stake-dereg-cert > "$TMP_DIR/stake-dereg-cert.out"
 test -f "$OUT_DIR/stake-dereg.cert" || fail "stake-dereg.cert was not created"
-assert_command_logged "latest stake-address deregistration-certificate"
+assert_command_logged "conway stake-address deregistration-certificate"
 
 if TX_IN=abc#0 "$SCRIPT" build-stake-dereg > "$TMP_DIR/stake-dereg-denied.out" 2>&1; then
   fail "stake dereg build should require ALLOW_STAKE_DEREG=1"

@@ -45,7 +45,7 @@ Prefer at least a few epochs ahead so delegators have time to move.
 Create the pool deregistration certificate with the cold verification key:
 
 ```bash
-cardano-cli stake-pool deregistration-certificate \
+cardano-cli conway stake-pool deregistration-certificate \
   --cold-verification-key-file cold.vkey \
   --epoch <RETIRE_EPOCH> \
   --out-file pool.dereg
@@ -66,7 +66,7 @@ cardano-cli query utxo \
 Build the transaction:
 
 ```bash
-cardano-cli latest transaction build \
+cardano-cli conway transaction build \
   --mainnet \
   --tx-in <TXHASH>#<TXIX> \
   --change-address "$(cat payment.addr)" \
@@ -78,7 +78,7 @@ cardano-cli latest transaction build \
 Sign with the payment signing key and cold signing key:
 
 ```bash
-cardano-cli latest transaction sign \
+cardano-cli conway transaction sign \
   --mainnet \
   --tx-body-file tx.raw \
   --signing-key-file payment.skey \
@@ -89,7 +89,7 @@ cardano-cli latest transaction sign \
 Submit:
 
 ```bash
-cardano-cli latest transaction submit \
+cardano-cli conway transaction submit \
   --mainnet \
   --tx-file tx.signed
 ```
@@ -121,7 +121,7 @@ Wait until the reward balance includes the returned 500 ADA pool deposit and any
 Withdraw rewards and deposit:
 
 ```bash
-cardano-cli latest transaction build \
+cardano-cli conway transaction build \
   --mainnet \
   --tx-in <TXHASH>#<TXIX> \
   --change-address "$(cat payment.addr)" \
@@ -129,14 +129,14 @@ cardano-cli latest transaction build \
   --witness-override 2 \
   --out-file withdraw.raw
 
-cardano-cli latest transaction sign \
+cardano-cli conway transaction sign \
   --mainnet \
   --tx-body-file withdraw.raw \
   --signing-key-file payment.skey \
   --signing-key-file stake.skey \
   --out-file withdraw.signed
 
-cardano-cli latest transaction submit \
+cardano-cli conway transaction submit \
   --mainnet \
   --tx-file withdraw.signed
 ```
@@ -148,7 +148,7 @@ Repeat withdrawal in later epochs if residual rewards continue to appear.
 Only after the pool deposit and rewards are withdrawn, create the stake deregistration certificate:
 
 ```bash
-cardano-cli latest stake-address deregistration-certificate \
+cardano-cli conway stake-address deregistration-certificate \
   --stake-verification-key-file stake.vkey \
   --out-file stake-dereg.cert
 ```

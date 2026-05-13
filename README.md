@@ -102,7 +102,7 @@ cardano-cli query protocol-parameters \
   --mainnet \
   --out-file "${OUT_DIR:-artifacts}/protocol.json"
 
-cardano-cli stake-pool deregistration-certificate \
+cardano-cli conway stake-pool deregistration-certificate \
   --cold-verification-key-file "$COLD_VKEY_FILE" \
   --epoch "$RETIRE_EPOCH" \
   --out-file "${OUT_DIR:-artifacts}/pool.dereg"
@@ -136,7 +136,7 @@ Raw `cardano-cli` equivalent:
 RETIRE_EPOCH=<epoch>
 TX_IN=<txhash#txix>
 
-cardano-cli latest transaction build \
+cardano-cli conway transaction build \
   --mainnet \
   --tx-in "$TX_IN" \
   --change-address "$(tr -d '[:space:]' < "$PAYMENT_ADDR_FILE")" \
@@ -144,7 +144,7 @@ cardano-cli latest transaction build \
   --certificate-file "${OUT_DIR:-artifacts}/pool.dereg" \
   --out-file "${OUT_DIR:-artifacts}/retirement.raw"
 
-cardano-cli latest transaction sign \
+cardano-cli conway transaction sign \
   --mainnet \
   --tx-body-file "${OUT_DIR:-artifacts}/retirement.raw" \
   --signing-key-file "$PAYMENT_SKEY_FILE" \
@@ -155,7 +155,7 @@ cardano-cli latest transaction sign \
 Submit only after reviewing the generated files:
 
 ```bash
-cardano-cli latest transaction submit \
+cardano-cli conway transaction submit \
   --mainnet \
   --tx-file "${OUT_DIR:-artifacts}/retirement.signed"
 ```
@@ -213,7 +213,7 @@ Raw `cardano-cli` equivalent:
 TX_IN=<txhash#txix>
 REWARD_BALANCE=<lovelace>
 
-cardano-cli latest transaction build \
+cardano-cli conway transaction build \
   --mainnet \
   --tx-in "$TX_IN" \
   --change-address "$(tr -d '[:space:]' < "$PAYMENT_ADDR_FILE")" \
@@ -221,7 +221,7 @@ cardano-cli latest transaction build \
   --witness-override 2 \
   --out-file "${OUT_DIR:-artifacts}/withdraw.raw"
 
-cardano-cli latest transaction sign \
+cardano-cli conway transaction sign \
   --mainnet \
   --tx-body-file "${OUT_DIR:-artifacts}/withdraw.raw" \
   --signing-key-file "$PAYMENT_SKEY_FILE" \
@@ -232,7 +232,7 @@ cardano-cli latest transaction sign \
 Submit only after reviewing the generated files:
 
 ```bash
-cardano-cli latest transaction submit \
+cardano-cli conway transaction submit \
   --mainnet \
   --tx-file "${OUT_DIR:-artifacts}/withdraw.signed"
 ```
@@ -276,11 +276,11 @@ Raw `cardano-cli` equivalent. Raw CLI has no `ALLOW_STAKE_DEREG` guard, so run t
 ```bash
 TX_IN=<txhash#txix>
 
-cardano-cli latest stake-address deregistration-certificate \
+cardano-cli conway stake-address deregistration-certificate \
   --stake-verification-key-file "$STAKE_VKEY_FILE" \
   --out-file "${OUT_DIR:-artifacts}/stake-dereg.cert"
 
-cardano-cli latest transaction build \
+cardano-cli conway transaction build \
   --mainnet \
   --tx-in "$TX_IN" \
   --change-address "$(tr -d '[:space:]' < "$PAYMENT_ADDR_FILE")" \
@@ -294,7 +294,7 @@ If a final tiny reward balance remains, include it in the build:
 ```bash
 REWARD_BALANCE=<lovelace>
 
-cardano-cli latest transaction build \
+cardano-cli conway transaction build \
   --mainnet \
   --tx-in "$TX_IN" \
   --change-address "$(tr -d '[:space:]' < "$PAYMENT_ADDR_FILE")" \
@@ -307,7 +307,7 @@ cardano-cli latest transaction build \
 Sign with payment and stake signing keys:
 
 ```bash
-cardano-cli latest transaction sign \
+cardano-cli conway transaction sign \
   --mainnet \
   --tx-body-file "${OUT_DIR:-artifacts}/stake-dereg.raw" \
   --signing-key-file "$PAYMENT_SKEY_FILE" \
@@ -318,7 +318,7 @@ cardano-cli latest transaction sign \
 Submit only after reviewing the generated files:
 
 ```bash
-cardano-cli latest transaction submit \
+cardano-cli conway transaction submit \
   --mainnet \
   --tx-file "${OUT_DIR:-artifacts}/stake-dereg.signed"
 ```
