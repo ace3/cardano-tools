@@ -44,6 +44,37 @@ make status
 
 `make status` prints the current epoch, `poolRetireMaxEpoch`, payment UTxOs, and stake address info.
 
+Raw `cardano-cli` examples below assume you are running from the repo root, `.env` has been sourced, and the same file paths used by the Makefile flow are available:
+
+```bash
+set -a
+source .env
+set +a
+
+mkdir -p "${OUT_DIR:-artifacts}"
+```
+
+Raw status equivalent:
+
+```bash
+cardano-cli query tip --mainnet | tee "${OUT_DIR:-artifacts}/tip.json"
+
+cardano-cli query protocol-parameters \
+  --mainnet \
+  --out-file "${OUT_DIR:-artifacts}/protocol.json"
+
+jq -r '.poolRetireMaxEpoch' "${OUT_DIR:-artifacts}/protocol.json"
+
+cardano-cli query utxo \
+  --mainnet \
+  --address "$(tr -d '[:space:]' < "$PAYMENT_ADDR_FILE")"
+
+cardano-cli query stake-address-info \
+  --mainnet \
+  --address "$(tr -d '[:space:]' < "$STAKE_ADDR_FILE")" \
+  | tee "${OUT_DIR:-artifacts}/stake-address-info.json"
+```
+
 ## Phase 1: Create The Retirement Certificate
 
 Choose a retirement epoch in this range:
@@ -59,6 +90,23 @@ make retirement-cert RETIRE_EPOCH=<epoch>
 ```
 
 The script writes `artifacts/pool.dereg`.
+
+Raw `cardano-cli` equivalent:
+
+```bash
+RETIRE_EPOCH=<epoch>
+
+cardano-cli query tip --mainnet | tee "${OUT_DIR:-artifacts}/tip.json"
+
+cardano-cli query protocol-parameters \
+  --mainnet \
+  --out-file "${OUT_DIR:-artifacts}/protocol.json"
+
+cardano-cli stake-pool deregistration-certificate \
+  --cold-verification-key-file "$COLD_VKEY_FILE" \
+  --epoch "$RETIRE_EPOCH" \
+  --out-file "${OUT_DIR:-artifacts}/pool.dereg"
+```
 
 ## Phase 2: Build, Sign, And Submit Retirement
 
@@ -82,6 +130,36 @@ make retirement-submit SUBMIT=1 CONFIRM=RETIRE_POOL
 
 After submission, keep the block producer, relays, and pledge running until the selected retirement epoch starts.
 
+Raw `cardano-cli` equivalent:
+
+```bash
+RETIRE_EPOCH=<epoch>
+TX_IN=<txhash#txix>
+
+cardano-cli latest transaction build \
+  --mainnet \
+  --tx-in "$TX_IN" \
+  --change-address "$(tr -d '[:space:]' < "$PAYMENT_ADDR_FILE")" \
+  --witness-override 2 \
+  --certificate-file "${OUT_DIR:-artifacts}/pool.dereg" \
+  --out-file "${OUT_DIR:-artifacts}/retirement.raw"
+
+cardano-cli latest transaction sign \
+  --mainnet \
+  --tx-body-file "${OUT_DIR:-artifacts}/retirement.raw" \
+  --signing-key-file "$PAYMENT_SKEY_FILE" \
+  --signing-key-file "$COLD_SKEY_FILE" \
+  --out-file "${OUT_DIR:-artifacts}/retirement.signed"
+```
+
+Submit only after reviewing the generated files:
+
+```bash
+cardano-cli latest transaction submit \
+  --mainnet \
+  --tx-file "${OUT_DIR:-artifacts}/retirement.signed"
+```
+
 ## Phase 3: Monitor Deposit And Rewards
 
 After the pool retires, keep checking:
@@ -91,6 +169,21 @@ make status
 ```
 
 Wait until the stake/rewards address includes the returned 500 ADA pool deposit and remaining rewards.
+
+Raw `cardano-cli` equivalent:
+
+```bash
+cardano-cli query tip --mainnet | tee "${OUT_DIR:-artifacts}/tip.json"
+
+cardano-cli query utxo \
+  --mainnet \
+  --address "$(tr -d '[:space:]' < "$PAYMENT_ADDR_FILE")"
+
+cardano-cli query stake-address-info \
+  --mainnet \
+  --address "$(tr -d '[:space:]' < "$STAKE_ADDR_FILE")" \
+  | tee "${OUT_DIR:-artifacts}/stake-address-info.json"
+```
 
 ## Phase 4: Withdraw Deposit And Rewards
 
@@ -113,6 +206,36 @@ make withdraw-submit SUBMIT=1 CONFIRM=WITHDRAW_REWARDS
 ```
 
 Repeat in later epochs if residual rewards continue to appear.
+
+Raw `cardano-cli` equivalent:
+
+```bash
+TX_IN=<txhash#txix>
+REWARD_BALANCE=<lovelace>
+
+cardano-cli latest transaction build \
+  --mainnet \
+  --tx-in "$TX_IN" \
+  --change-address "$(tr -d '[:space:]' < "$PAYMENT_ADDR_FILE")" \
+  --withdrawal "$(tr -d '[:space:]' < "$STAKE_ADDR_FILE")+$REWARD_BALANCE" \
+  --witness-override 2 \
+  --out-file "${OUT_DIR:-artifacts}/withdraw.raw"
+
+cardano-cli latest transaction sign \
+  --mainnet \
+  --tx-body-file "${OUT_DIR:-artifacts}/withdraw.raw" \
+  --signing-key-file "$PAYMENT_SKEY_FILE" \
+  --signing-key-file "$STAKE_SKEY_FILE" \
+  --out-file "${OUT_DIR:-artifacts}/withdraw.signed"
+```
+
+Submit only after reviewing the generated files:
+
+```bash
+cardano-cli latest transaction submit \
+  --mainnet \
+  --tx-file "${OUT_DIR:-artifacts}/withdraw.signed"
+```
 
 ## Phase 5: Deregister Stake Key
 
@@ -146,6 +269,58 @@ Submit:
 
 ```bash
 make stake-dereg-submit SUBMIT=1 CONFIRM=DEREGISTER_STAKE ALLOW_STAKE_DEREG=1
+```
+
+Raw `cardano-cli` equivalent. Raw CLI has no `ALLOW_STAKE_DEREG` guard, so run this only after confirming the pool deposit and rewards are withdrawn:
+
+```bash
+TX_IN=<txhash#txix>
+
+cardano-cli latest stake-address deregistration-certificate \
+  --stake-verification-key-file "$STAKE_VKEY_FILE" \
+  --out-file "${OUT_DIR:-artifacts}/stake-dereg.cert"
+
+cardano-cli latest transaction build \
+  --mainnet \
+  --tx-in "$TX_IN" \
+  --change-address "$(tr -d '[:space:]' < "$PAYMENT_ADDR_FILE")" \
+  --certificate-file "${OUT_DIR:-artifacts}/stake-dereg.cert" \
+  --witness-override 2 \
+  --out-file "${OUT_DIR:-artifacts}/stake-dereg.raw"
+```
+
+If a final tiny reward balance remains, include it in the build:
+
+```bash
+REWARD_BALANCE=<lovelace>
+
+cardano-cli latest transaction build \
+  --mainnet \
+  --tx-in "$TX_IN" \
+  --change-address "$(tr -d '[:space:]' < "$PAYMENT_ADDR_FILE")" \
+  --certificate-file "${OUT_DIR:-artifacts}/stake-dereg.cert" \
+  --witness-override 2 \
+  --out-file "${OUT_DIR:-artifacts}/stake-dereg.raw" \
+  --withdrawal "$(tr -d '[:space:]' < "$STAKE_ADDR_FILE")+$REWARD_BALANCE"
+```
+
+Sign with payment and stake signing keys:
+
+```bash
+cardano-cli latest transaction sign \
+  --mainnet \
+  --tx-body-file "${OUT_DIR:-artifacts}/stake-dereg.raw" \
+  --signing-key-file "$PAYMENT_SKEY_FILE" \
+  --signing-key-file "$STAKE_SKEY_FILE" \
+  --out-file "${OUT_DIR:-artifacts}/stake-dereg.signed"
+```
+
+Submit only after reviewing the generated files:
+
+```bash
+cardano-cli latest transaction submit \
+  --mainnet \
+  --tx-file "${OUT_DIR:-artifacts}/stake-dereg.signed"
 ```
 
 ## Phase 6: Move Pledge And Shut Down Infrastructure
